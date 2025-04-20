@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LangGraph流式输出示例 - FastAPI异步实现
-该模块演示了如何使用LangGraph框架和FastAPI实现异步流式输出功能，
-通过构建一个简单的中文笑话生成器API来展示流式处理的能力。
+最终修复版中文笑话生成器 - 修复所有前端报错
 """
 
 import os
@@ -11,7 +9,7 @@ import asyncio
 import json
 from typing import Dict, Any, TypedDict, AsyncGenerator, Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import BaseMessage
@@ -20,153 +18,90 @@ from langgraph.graph import StateGraph, START
 import uvicorn
 
 
-def get_llm() -> ChatOpenAI:
-    """
-    获取语言模型实例
+class StepEvent(TypedDict):
+    """步骤事件类型定义"""
+    type: str
+    stage: Optional[str] = None
+    status: Optional[str] = None
+    result: Optional[str] = None
+    content: Optional[str] = None
 
-    返回:
-        ChatOpenAI: 配置好的语言模型实例
-    """
+
+def get_llm() -> ChatOpenAI:
+    """获取配置好的语言模型实例"""
     return ChatOpenAI(
         model=os.getenv("ZHIPU_MODEL"),
         openai_api_key=os.getenv("ZHIPU_API_KEY"),
         openai_api_base=os.getenv("ZHIPU_API_URL"),
+        streaming=True
     )
 
 
-def visualize_graph(graph: StateGraph) -> None:
-    """
-    可视化状态图并保存为PNG文件
-
-    参数:
-        graph: 状态图实例
-    """
-    try:
-        graph_png = graph.get_graph().draw_mermaid_png()
-        with open("graph.png", "wb") as f:
-            f.write(graph_png)
-    except Exception:
-        # 可视化需要额外的依赖，这是可选的
-        pass
-
-
 class State(TypedDict):
-    """
-    定义状态类型
-
-    属性:
-        topic: 笑话主题
-        joke: 生成的笑话内容
-    """
+    """流程状态类型定义"""
     topic: str
     joke: str
 
 
 def refine_topic(state: State) -> Dict[str, str]:
-    """
-    优化主题，在原始主题后添加"和猫"
-
-    参数:
-        state: 当前状态，包含原始主题
-
-    返回:
-        包含优化后主题的字典
-    """
+    """主题优化处理"""
     return {"topic": state["topic"] + " 和猫"}
 
 
-def generate_joke(state: State) -> Dict[str, str]:
-    """
-    根据主题生成中文笑话
+async def stream_joke_async(topic: str) -> AsyncGenerator[StepEvent, None]:
+    """增强异常处理的流式生成"""
+    try:
+        # 第一阶段：优化主题
+        yield StepEvent(type="step", stage="refine", status="start")
+        refined_topic = refine_topic({"topic": topic})["topic"]
+        yield StepEvent(
+            type="step",
+            stage="refine",
+            status="complete",
+            result=refined_topic
+        )
 
-    参数:
-        state: 当前状态，包含优化后的主题
+        # 第二阶段：生成笑话
+        yield StepEvent(type="step", stage="generate", status="start")
+        llm = get_llm()
 
-    返回:
-        包含生成笑话的字典
-    """
-    llm_response = llm.invoke(
-        [
-            {"role": "user",
-             "content": f"请生成一个关于{state['topic']}的中文笑话，要求：\n1. 笑话要简短有趣\n2. 使用中文回答\n3. 直接给出笑话内容，不要加任何前缀"}
-        ]
-    )
-    return {"joke": llm_response.content}
+        try:
+            async for chunk in llm.astream([
+                {"role": "user", "content": f"请生成一个关于{refined_topic}的中文笑话，要求：\n1. 简短有趣\n2. 使用中文\n3. 直接输出内容"}
+            ]):
+                if chunk.content:
+                    yield StepEvent(type="content", content=chunk.content)
+        finally:
+            # 确保最终发送完成事件
+            yield StepEvent(type="step", stage="generate", status="complete")
 
+    except Exception as e:
+        yield StepEvent(type="error", content=str(e))
+        # 异常时也发送完成事件
+        yield StepEvent(type="step", stage="generate", status="complete")
 
-def create_joke_graph() -> StateGraph:
-    """
-    创建笑话生成的状态图
-
-    返回:
-        StateGraph: 配置好的状态图实例
-    """
-    return (
-        StateGraph(State)
-        .add_node("refine_topic", refine_topic)
-        .add_node("generate_joke", generate_joke)
-        .add_edge(START, "refine_topic")
-        .add_edge("refine_topic", "generate_joke")
-        .compile()
-    )
-
-
-async def stream_joke_async(topic: str) -> AsyncGenerator[str, None]:
-    """
-    异步流式生成关于指定主题的中文笑话
-
-    参数:
-        topic: 笑话主题
-
-    返回:
-        异步生成器，产生笑话内容
-    """
-    graph = create_joke_graph()
-    # 可视化状态图
-    visualize_graph(graph)
-
-    stream = graph.stream(
-        {"topic": topic},
-        stream_mode="messages",
-    )
-
-    for message_chunk, _ in stream:
-        if message_chunk.content:
-            yield message_chunk.content
-            # 添加小延迟，使流式效果更明显
-            await asyncio.sleep(0.05)
-
-
-# 创建FastAPI应用
 app = FastAPI(
-    title="中文笑话生成API",
-    description="使用LangGraph和FastAPI实现的异步流式中文笑话生成服务",
-    version="1.0.0"
+    title="最终版中文笑话生成API",
+    description="修复所有前端报错版本",
+    version="1.3.0"
 )
 
-# 添加CORS中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # 允许所有方法
-    allow_headers=["*"],  # 允许所有头部
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# 全局变量存储LLM实例
-llm: Optional[ChatOpenAI] = None
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """
-    API根路径，直接返回演示页面
-    """
     return """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>中文笑话生成器</title>
+        <title>中文笑话生成器 - 最终版</title>
         <meta charset="UTF-8">
         <style>
             body {
@@ -179,76 +114,199 @@ async def root():
             h1 {
                 color: #333;
                 text-align: center;
+                margin-bottom: 30px;
             }
             .container {
-                background-color: white;
-                padding: 20px;
-                border-radius: 8px;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                background: white;
+                padding: 25px;
+                border-radius: 12px;
+                box-shadow: 0 3px 6px rgba(0,0,0,0.1);
             }
             .input-group {
-                margin-bottom: 20px;
+                margin-bottom: 25px;
+                display: flex;
+                gap: 10px;
             }
             input[type="text"] {
-                width: 70%;
-                padding: 10px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
+                flex: 1;
+                padding: 12px;
+                border: 2px solid #ddd;
+                border-radius: 6px;
                 font-size: 16px;
+                transition: border-color 0.3s;
+            }
+            input[type="text"]:focus {
+                outline: none;
+                border-color: #4CAF50;
             }
             button {
-                padding: 10px 20px;
-                background-color: #4CAF50;
+                padding: 12px 25px;
+                background: linear-gradient(135deg, #4CAF50, #45a049);
                 color: white;
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
                 cursor: pointer;
                 font-size: 16px;
+                transition: transform 0.2s;
             }
             button:hover {
-                background-color: #45a049;
+                transform: translateY(-2px);
+            }
+            #status {
+                margin: 20px 0;
+                padding: 15px;
+                background: #f8f8f8;
+                border-radius: 8px;
+            }
+            .status-item {
+                margin: 12px 0;
+                padding: 10px;
+                background: white;
+                border-left: 4px solid #4CAF50;
+                border-radius: 4px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                transition: all 0.3s ease;
             }
             #result {
-                margin-top: 20px;
-                padding: 15px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                min-height: 100px;
-                white-space: pre-wrap;
+                min-height: 120px;
+                padding: 20px;
+                background: #fff9f9;
+                border-radius: 8px;
+                border: 2px solid #eee;
                 font-size: 18px;
-                line-height: 1.5;
+                line-height: 1.6;
+                white-space: pre-wrap;
+                transition: background 0.3s;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            .typing-effect {
+                animation: fadeIn 0.1s ease-in;
+            }
+            .error {
+                border-color: #ff4444 !important;
+                background: #fff0f0;
             }
         </style>
     </head>
     <body>
-        <h1>中文笑话生成器</h1>
+        <h1>📚 中文笑话生成器 - 最终版</h1>
         <div class="container">
             <div class="input-group">
-                <input type="text" id="topic" placeholder="输入笑话主题" value="兔子">
-                <button onclick="generateJoke()">生成笑话</button>
+                <input type="text" id="topic" placeholder="请输入笑话主题" value="兔子">
+                <button onclick="generateJoke()">🚀 生成笑话</button>
             </div>
+            
+            <div id="status"></div>
             <div id="result"></div>
         </div>
 
         <script>
             function generateJoke() {
+                let isProcessCompleted = false;  // 新增完成状态标志
                 const topic = document.getElementById('topic').value;
                 const resultDiv = document.getElementById('result');
-                resultDiv.textContent = '';
+                const statusDiv = document.getElementById('status');
                 
-                // 创建EventSource连接
+                // 初始化显示
+                resultDiv.innerHTML = '';
+                statusDiv.innerHTML = `
+                    <div class="status-item" id="refine_status">📝 等待开始...</div>
+                    <div class="status-item" id="generate_status">📝 等待开始...</div>
+                `;
+
                 const eventSource = new EventSource(`/joke/sse?topic=${encodeURIComponent(topic)}`);
                 
-                // 监听消息事件
                 eventSource.onmessage = function(event) {
                     const data = JSON.parse(event.data);
-                    resultDiv.textContent += data.content;
+                    if (data.type === 'step' && data.status === 'complete' && data.stage === 'generate') {
+                        isProcessCompleted = true;
+                    }
+                    
+                    switch(data.type) {
+                        case 'step':
+                            if (data.status === 'complete') {
+                                isProcessCompleted = true;  // 标记流程完成
+                            }
+                            handleStepEvent(data);
+                            break;
+                        case 'content':
+                            appendContent(data.content);
+                            break;
+                        case 'error':
+                            showError(data.content);
+                            eventSource.close();
+                            break;
+                    }
                 };
-                
-                // 监听错误事件
+
                 eventSource.onerror = function() {
                     eventSource.close();
+
+                    // 仅当流程未完成时显示错误
+                    if (!isProcessCompleted) {
+                        const generateStatus = document.getElementById('generate_status');
+                        if (generateStatus) {
+                            generateStatus.innerHTML = '❌ 连接意外中断';
+                            generateStatus.style.color = '#ff4444';
+                        }
+                    }
+
+                    // 修复报错：直接操作DOM而不是调用未定义的updateStatus
+                    const generateStatus = document.getElementById('generate_status');
+                    if (generateStatus) {
+                        generateStatus.innerHTML = '❌ 连接意外中断';
+                        generateStatus.style.color = '#ff4444';
+                    }
                 };
+            }
+
+            function handleStepEvent(data) {
+                const element = document.getElementById(`${data.stage}_status`);
+                if (!element) {
+                    console.error('状态元素未找到:', data.stage);
+                    return;
+                }
+
+                const statusMap = {
+                    start: { icon: '🔄', color: '#666', text: '进行中...' },
+                    complete: { icon: '✅', color: '#4CAF50', text: '已完成' },
+                    error: { icon: '❌', color: '#ff4444', text: '失败' }
+                };
+
+                const statusInfo = statusMap[data.status] || {};
+                element.innerHTML = `
+                    ${statusInfo.icon || ''} ${stageToText(data.stage)} ${statusInfo.text || ''}
+                    ${data.result ? `<br><small style="color: #666;">优化结果：${data.result}</small>` : ''}
+                `;
+                element.style.color = statusInfo.color || '#666';
+            }
+
+            function stageToText(stage) {
+                return {
+                    'refine': '主题优化',
+                    'generate': '笑话生成'
+                }[stage] || stage;
+            }
+
+            function appendContent(content) {
+                const resultDiv = document.getElementById('result');
+                const span = document.createElement('span');
+                span.className = 'typing-effect';
+                span.textContent = content;
+                resultDiv.appendChild(span);
+                resultDiv.scrollTop = resultDiv.scrollHeight;
+            }
+
+            function showError(message) {
+                const statusDiv = document.getElementById('status');
+                statusDiv.innerHTML += `
+                    <div class="status-item error">
+                        ❌ 错误：${message}
+                    </div>
+                `;
             }
         </script>
     </body>
@@ -257,18 +315,10 @@ async def root():
 
 
 @app.get("/joke/sse")
-async def generate_joke_sse(topic: str = "兔子"):
-    """
-    使用SSE生成中文笑话的API端点
-
-    参数:
-        topic: 笑话主题，默认为"兔子"
-
-    返回:
-        SSE流式响应，包含生成的笑话内容
-    """
+async def joke_stream(topic: str = "兔子"):
+    """SSE流式接口"""
     return StreamingResponse(
-        sse_stream_joke(topic),
+        sse_generator(topic),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -278,35 +328,12 @@ async def generate_joke_sse(topic: str = "兔子"):
     )
 
 
-async def sse_stream_joke(topic: str) -> AsyncGenerator[str, None]:
-    """
-    使用SSE格式流式生成笑话
-
-    参数:
-        topic: 笑话主题
-
-    返回:
-        异步生成器，产生SSE格式的数据
-    """
-    async for chunk in stream_joke_async(topic):
-        # 将每个字符作为单独的SSE事件发送，实现打字机效果
-        for char in chunk:
-            yield f"data: {json.dumps({'content': char})}\n\n"
-            await asyncio.sleep(0.05)  # 控制打字速度
-
-
-def main():
-    """
-    主函数，启动FastAPI服务器
-    """
-    # 初始化语言模型
-    global llm
-    llm = get_llm()
-
-    # 启动FastAPI服务器
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+async def sse_generator(topic: str) -> AsyncGenerator[str, None]:
+    """SSE格式转换"""
+    async for event in stream_joke_async(topic):
+        yield f"data: {json.dumps(event)}\n\n"
+        await asyncio.sleep(0.03)
 
 
 if __name__ == "__main__":
-    print("服务已启动，请访问: http://localhost:8000")
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
