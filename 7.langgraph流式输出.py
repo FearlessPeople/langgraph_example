@@ -34,6 +34,22 @@ def get_llm() -> ChatOpenAI:
     )
 
 
+def visualize_graph(graph: StateGraph) -> None:
+    """
+    可视化状态图并保存为PNG文件
+
+    参数:
+        graph: 状态图实例
+    """
+    try:
+        graph_png = graph.get_graph().draw_mermaid_png()
+        with open("graph.png", "wb") as f:
+            f.write(graph_png)
+    except Exception:
+        # 可视化需要额外的依赖，这是可选的
+        pass
+
+
 class State(TypedDict):
     """
     定义状态类型
@@ -106,6 +122,9 @@ async def stream_joke_async(topic: str) -> AsyncGenerator[str, None]:
         异步生成器，产生笑话内容
     """
     graph = create_joke_graph()
+    # 可视化状态图
+    visualize_graph(graph)
+
     stream = graph.stream(
         {"topic": topic},
         stream_mode="messages",
@@ -138,74 +157,10 @@ app.add_middleware(
 llm: Optional[ChatOpenAI] = None
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
     """
-    API根路径，返回欢迎信息
-    """
-    return {"message": "欢迎使用中文笑话生成API，请访问 /joke?topic=主题 来生成笑话"}
-
-
-@app.get("/joke")
-async def generate_joke_api(topic: str = "兔子"):
-    """
-    生成中文笑话的API端点
-
-    参数:
-        topic: 笑话主题，默认为"兔子"
-
-    返回:
-        流式响应，包含生成的笑话内容
-    """
-    return StreamingResponse(
-        stream_joke_async(topic),
-        media_type="text/plain"
-    )
-
-
-async def sse_stream_joke(topic: str) -> AsyncGenerator[str, None]:
-    """
-    使用SSE格式流式生成笑话
-
-    参数:
-        topic: 笑话主题
-
-    返回:
-        异步生成器，产生SSE格式的数据
-    """
-    async for chunk in stream_joke_async(topic):
-        # 将每个字符作为单独的SSE事件发送，实现打字机效果
-        for char in chunk:
-            yield f"data: {json.dumps({'content': char})}\n\n"
-            await asyncio.sleep(0.05)  # 控制打字速度
-
-
-@app.get("/joke/sse")
-async def generate_joke_sse(topic: str = "兔子"):
-    """
-    使用SSE生成中文笑话的API端点
-
-    参数:
-        topic: 笑话主题，默认为"兔子"
-
-    返回:
-        SSE流式响应，包含生成的笑话内容
-    """
-    return StreamingResponse(
-        sse_stream_joke(topic),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
-
-
-@app.get("/demo", response_class=HTMLResponse)
-async def demo_page():
-    """
-    提供演示页面
+    API根路径，直接返回演示页面
     """
     return """
     <!DOCTYPE html>
@@ -301,6 +256,45 @@ async def demo_page():
     """
 
 
+@app.get("/joke/sse")
+async def generate_joke_sse(topic: str = "兔子"):
+    """
+    使用SSE生成中文笑话的API端点
+
+    参数:
+        topic: 笑话主题，默认为"兔子"
+
+    返回:
+        SSE流式响应，包含生成的笑话内容
+    """
+    return StreamingResponse(
+        sse_stream_joke(topic),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+async def sse_stream_joke(topic: str) -> AsyncGenerator[str, None]:
+    """
+    使用SSE格式流式生成笑话
+
+    参数:
+        topic: 笑话主题
+
+    返回:
+        异步生成器，产生SSE格式的数据
+    """
+    async for chunk in stream_joke_async(topic):
+        # 将每个字符作为单独的SSE事件发送，实现打字机效果
+        for char in chunk:
+            yield f"data: {json.dumps({'content': char})}\n\n"
+            await asyncio.sleep(0.05)  # 控制打字速度
+
+
 def main():
     """
     主函数，启动FastAPI服务器
@@ -314,5 +308,5 @@ def main():
 
 
 if __name__ == "__main__":
-    print("http://localhost:8000/demo")
+    print("服务已启动，请访问: http://localhost:8000")
     main()
